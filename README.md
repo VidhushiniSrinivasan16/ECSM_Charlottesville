@@ -14,7 +14,7 @@ These annotations are also made available along with tweet and User/Actor Id's.
 
 The Dataset is availalable as a text file in "charlottesville_tweet_user_id.txt"
 
-1. **Unite the Right rally - Charlottesville** - Id's(Tweet Id), Profile Id's(user_id) and Annotations from tweets of "Unite the Right rally", Charlottesville from Feb 2017 to October 2017.
+1. **Unite the Right rally - Charlottesville** - tweetId, actorId and annotations from tweets of "Unite the Right rally", Charlottesville from Feb 2017 to October 2017.
 ```
 
 This repository contains a mixture of codebase written in R (predominantly) and Python.

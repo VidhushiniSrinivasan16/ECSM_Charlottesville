@@ -3,7 +3,14 @@ Emoji Analysis on Charlottesville Solidarity tweets
 
 **Charlottesville dataset made available**
 ```
-Due to Twitter's restrictions, we are only able to share the tweet ID's, User ID's and Annotations(-1 - Non Solidarity, 0 - Cannot be determined, 1- Solidarity)
+Due to Twitter's restrictions, we are only able to share the tweet ID's and User/Actor ID's. 
+
+We have annotated the tweets into following Categories:
+* -1 - Non Solidarity, 
+* 0 - Cannot be determined, 
+* 1 - Solidarity)
+
+These annotations are also made available along with tweet and User/Actor Id's.
 
 The Datasets are available in the dataset folder
 

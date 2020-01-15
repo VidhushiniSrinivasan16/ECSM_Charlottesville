@@ -1,0 +1,1991 @@
+```{r}
+options(stringsAsFactors = FALSE)
+library(slam)
+library(magrittr)
+library(textcat)
+#library(cldr)
+library(entropart)
+#update.packages()
+library(tidyverse)
+#library(tokenizers)
+library(mgcv)
+library(twitteR)
+library(plyr)
+library(dplyr)
+library(boot)
+library(vegan)
+library(simboot)
+library(ROAuth)
+library(stringr)
+library(readxl)
+library(stringi)
+library(stringr)
+#library(tidytext)
+library(tidyr)
+library(dplyr)
+library(tm)
+library(scales)
+library(reshape2)
+library(ggplot2)
+#library(sentiment)
+library(SnowballC)
+library(tm)
+library(RColorBrewer)
+library(Unicode)
+```
+```{r}
+install.packages("magrittr")
+```
+
+```{r}
+Sys.setlocale(category = "LC_ALL", locale = "en_US.UTF-8")
+```
+#Load the data from the csv file
+```{r}
+setwd("/Users/v.srinivasan/Downloads/ACM_Emoji_Vidhushini/")
+data_charlottesville = read.csv2(file="clt_solidarity_only_eliza.csv",header=TRUE,sep=",",encoding="UTF-8")
+```
+
+```{r}
+head(data_charlottesville)
+```
+
+```{r}
+unique(data_charlottesville$tweetLanguage)
+```
+
+
+```{r}
+data_solidarity = subset(data_charlottesville, annotations== 1)
+data_non_solidarity = subset(data_charlottesville, annotations==-1)
+```
+
+
+```{r}
+#rm(new_data)
+
+data_solidarity_month <- data_solidarity %>% dplyr::mutate(text=iconv(body, from = "latin1", to = "ascii", sub = "byte"))%>%dplyr::mutate(month=strftime(as.Date(postedTime, "%Y-%m-%d %H:%M:%S"), "%m"),date=strftime(as.Date(postedTime, "%Y-%m-%d %H:%M:%S"), "%d"))
+```
+
+```{r}
+#rm(new_data)
+
+data_non_solidarity_month <- data_non_solidarity %>% dplyr::mutate(text=iconv(body, from = "latin1", to = "ascii", sub = "byte"))%>%dplyr::mutate(month=strftime(as.Date(postedTime, "%Y-%m-%d %H:%M:%S"), "%m"),date=strftime(as.Date(postedTime, "%Y-%m-%d %H:%M:%S"), "%d"))
+```
+
+
+```{r}
+unique(data_non_solidarity_month$month)
+```
+
+```{r}
+data_solidarity_face = data_solidarity[1:8000,]
+data_solidarity_object = data_solidarity[8001:17000,]
+data_solidarity_faceobject = data_solidarity[17001:24500,]
+```
+
+```{r}
+data_solidarity_I = data_solidarity%>%dplyr::filter(str_detect(body,"me "))
+data_solidarity_We = data_solidarity%>%dplyr::filter(str_detect(body,"our "))
+```
+
+```{r}
+nrow(data_solidarity_I)
+nrow(data_solidarity_We)
+```
+
+
+```{r}
+head(data_solidarity_We,5)
+```
+
+```{r}
+write.csv(data_solidarity,"charlottesville_solidarity.csv")
+```
+
+
+#Number of solidarity and non-solidarity tweets
+```{r}
+nrow(data_solidarity)
+nrow(data_non_solidarity)
+```
+
+```{r}
+res = unique(data_solidarity$actorId)
+```
+
+```{r}
+length(res)
+```
+
+#get the solidarity tweets from the dataframe 
+```{r}
+sol_tweets <- data_solidarity %>% select(body) 
+sol_tweets <- unique(sol_tweets)
+sol_tweets
+```
+
+
+#get the non-solidarity tweets from the dataframe 
+```{r}
+non_sol_tweets <- data_non_solidarity %>% select(body) 
+non_sol_tweets <- unique(non_sol_tweets)
+```
+
+#Load the emoji dictionary containing emoji's and the unicode values
+```{r}
+emDict_raw <- read.csv2("emDict.csv") %>% 
+      select(EN, utf8, unicode) %>% 
+      dplyr::rename(description = EN, r_encoding = utf8)
+```
+
+#pre-process skin ones if necessary
+```{r}
+# plain skin tones
+skin_tones <- c("light skin tone", 
+                "medium-light skin tone", 
+                "medium skin tone",
+                "medium-dark skin tone", 
+                "dark skin tone")
+# remove plain skin tones and remove skin tone info in description
+emDict <- emDict_raw %>%
+  # remove plain skin tones emojis
+  filter(!description %in% skin_tones) %>%
+  # remove emojis with skin tones info, e.g. remove woman: light skin tone and only
+  # keep woman
+ filter(!grepl(":", description)) %>%
+ mutate(description = tolower(description)) %>%
+ mutate(unicode = as.u_char(unicode))
+```
+
+
+```{r}
+count_matches <- function(string, matchto, description) {
+  
+  vec <- str_count(string, matchto)
+  matches <- which(vec != 0)
+  
+  descr <- NA
+  cnt <- NA
+  
+  if (length(matches) != 0) {
+    
+    descr <- description[matches]
+    cnt <- vec[matches]
+    
+  } 
+  
+  df <- data.frame(text = string, description = descr, count = cnt)
+  
+  
+  return(df)
+  
+}
+```
+
+
+
+
+```{r}
+require("parallel")
+parallel_match<- function(texts, matchto, description,mc.cores = 4) {
+emojis_matching <- function(txt,matchto, description) {
+   txt %>% lapply(count_matches, matchto = matchto, description = description) %>%
+    bind_rows
+}
+mclapply(X = texts,FUN = emojis_matching, matchto, description, mc.cores = mc.cores) %>%
+   bind_rows
+
+}
+```
+
+
+```{r}
+# tweets cleaning pipe
+cleanPosts <- function(text) {
+  clean_texts <- text %>%
+    gsub("<.*>", "", .) %>% # remove emojis
+    gsub("&amp;", "", .) %>% # remove &
+    gsub("(RT|via)((?:\\b\\W*@\\w+)+)", "", .) %>% # remove retweet entities
+    gsub("@\\w+", "", .) %>% # remove at people
+    hashgrep %>%
+    gsub("[[:punct:]]", "", .) %>% # remove punctuation
+    gsub("[[:digit:]]", "", .) %>% # remove digits
+    gsub("http\\w+", "", .) %>% # remove html links
+    iconv(from = "latin1", to = "ASCII", sub="") %>% # remove emoji and bizarre signs
+    gsub("[ \t]{2,}", " ", .) %>% # remove unnecessary spaces
+    gsub("^\\s+|\\s+$", "", .) %>% # remove unnecessary spaces
+    tolower
+  return(clean_texts)
+}
+```
+
+```{r}
+# function that separates capital letters hashtags
+hashgrep <- function(text) {
+  hg <- function(text) {
+    result <- ""
+    while(text != result) {
+      result <- text
+      text <- gsub("#[[:alpha:]]+\\K([[:upper:]]+)", " \\1", text, perl = TRUE)
+    }
+    return(text)
+  }
+  unname(sapply(text, hg))
+}
+
+```
+
+
+```{r}
+# reference website
+url <- "http://kt.ijs.si/data/Emoji_sentiment_ranking/index.html"
+```
+
+```{r}
+library(Unicode)
+```
+
+
+
+```{r}
+library("rvest")
+emojis_raw <- url %>%
+  read_html() %>%
+  html_table() %>%
+  data.frame %>%
+  dplyr::select(-Image.twemoji., -Sentiment.bar.c.i..95..)
+names(emojis_raw) <- c("char", "unicode", "occurrences", "position", "negative", "neutral", "positive", "sentiment_score", "description", "block")
+```
+
+```{r}
+emojis_raw[emojis_raw$description=="red heart",]
+```
+
+```{r}
+
+# change numeric unicode to character unicode to be able to match with emDict 
+emojis <- emojis_raw %>%
+  dplyr::mutate(unicode = as.u_char(unicode)) %>%
+  dplyr::mutate(description = tolower(description)) 
+
+#str(emojis)
+```
+
+
+```{r}
+# merge with emDict to get encoding
+emojis_merged <- emojis %>%
+  merge(emDict, by = "unicode")
+```
+
+
+```{r}
+head(emojis_merged)
+```
+
+
+
+```{r}
+new_matchto <- emojis_merged$r_encoding
+new_description <- emojis_merged$description.y
+sentiment <- emojis_merged$sentiment_score
+neutral <- emojis_merged$neutral
+```
+
+
+```{r}
+new_data_solidarity <- data_solidarity %>% 
+  mutate(text = iconv(body, from = "latin1", to = "ascii", sub = "byte"))
+```
+
+```{r}
+head(new_data_solidarity)
+```
+
+#get the rank of emoji's in solidarity tweets
+```{r}
+library(dplyr)
+require(parallel) 
+raw_tweets <- parallel_match(new_data_solidarity$text, new_matchto, new_description, mc.cores=4)%>% 
+  filter(text != "") %>% filter(!is.na(count)) 
+  
+```
+
+```{r}
+head(raw_tweets, 5)
+```
+
+```{r}
+unique(raw_tweets$description)
+```
+
+```{r}
+raw_tweets_altered <- cbind(raw_tweets,unique_count=1)
+```
+
+```{r}
+emoji_categories = read.csv2("all_emoji_in_corpus.csv",header = TRUE, sep = ",")
+```
+
+
+```{r}
+head(emoji_categories, 5)
+```
+
+```{r}
+# merge with emDict to get encoding
+emoji_all_tweets_categories <- raw_tweets_altered %>%
+  merge(emoji_categories, by = "description")
+```
+
+```{r}
+head(emoji_all_tweets_categories, 5)
+```
+
+```{r}
+emoji_all_tweets_categories$Category
+```
+
+
+### Emoji Diversity
+```{r}
+library(dplyr)
+Face_emoji<- emoji_all_tweets_categories%>%group_by(description)%>%dplyr::filter(Category=="Face")%>%dplyr::summarise(count=sum(count))%>%arrange(-count)
+Object_emoji<- emoji_all_tweets_categories%>%group_by(description)%>%dplyr::filter(Category=="Object")%>%dplyr::summarise(count=sum(count))%>%arrange(-count)
+Gesture_emoji<- emoji_all_tweets_categories%>%group_by(description)%>%dplyr::filter(Category=="Gestures")%>%dplyr::summarise(count=sum(count))%>%arrange(-count)
+```
+
+```{r}
+nrow(Face_emoji)
+nrow(Object_emoji)
+nrow(Gesture_emoji)
+```
+
+### Group by text and make category as separate fields to get face/object/gesture emoji per tweet count.
+
+```{r}
+tweets_classified<-emoji_all_tweets_categories %>% group_by(text,Category) %>% 
+       dplyr::summarise(description = paste(description, collapse =", ") ,total_count =sum(count), Total_unique_count = sum(unique_count)) %>% 
+       spread(Category, total_count) %>% 
+       dplyr::ungroup() %>%
+       dplyr::transmute(text=text,description=description, face_count = Face , object_count = Object, gesture_count = Gestures, total_unique_count = Total_unique_count)
+```
+
+```{r}
+tweets_classified[is.na(tweets_classified)] <- 0
+```
+
+```{r}
+tweets_classified
+```
+
+
+```{r}
+max(tweets_classified[,5], na.rm=T)
+```
+
+```{r}
+head(tweets_classified, 5)
+```
+```{r}
+sum(tweets_classified$gesture_count)
+```
+```{r}
+tweets_test <- subset(tweets_classified, description == "backhand index pointing right")
+```
+
+
+```{r}
+sum(tweets_test$gesture_count)
+```
+
+```{r}
+face_only <- dplyr::filter(tweets_classified, (face_count!= 0 & object_count==0 & gesture_count==0))
+object_only <- dplyr::filter(tweets_classified, (face_count== 0 & object_count!=0 & gesture_count==0))
+gesture_only <-dplyr::filter(tweets_classified, (face_count== 0 & object_count==0 & gesture_count!=0))
+face_object_only <- dplyr::filter(tweets_classified, (face_count!= 0 & object_count!=0 & gesture_count==0))
+face_gesture_only <- dplyr::filter(tweets_classified, (face_count!= 0 & object_count==0 & gesture_count!=0))
+object_gesture_only <- dplyr::filter(tweets_classified, (face_count== 0 & object_count!=0 & gesture_count!=0))
+all_three <- dplyr::filter(tweets_classified, (face_count!= 0 & object_count!=0 & gesture_count!=0))
+
+```
+
+```{r}
+tweets_classified
+```
+
+
+```{r}
+nrow(face_only)
+nrow(object_only)
+nrow(gesture_only)
+nrow(face_object_only)
+nrow(object_gesture_only)
+nrow(face_gesture_only)
+nrow(all_three)
+```
+
+
+```{r}
+library("iNEXT")
+face_var<-ChaoShannon(face_only$face_count, datatype = "abundance", conf = 0.95)/log(2)
+object_var<-ChaoShannon(object_only$object_count, datatype = "abundance", conf = 0.95)/log(2)
+gesture_var<-ChaoShannon(gesture_only$gesture_count, datatype = "abundance", conf = 0.95)/log(2)
+```
+
+
+```{r}
+gesture_var
+```
+
+##Word cloud
+```{r}
+I_full <-  new_data_solidarity%>%dplyr::filter(str_detect(text,regex('I\\s+ |Me\\s+|Mine\\s+|My\\s+|i\\s+|me\\s+|mine\\s+|my\\s+',ignore_case = T)))
+We_full <-  new_data_solidarity%>%dplyr::filter(str_detect(text,regex('We\\s+|Our\\s+|Ours\\s+|Us\\s+|we\\s+|our\\s+|ours\\s+|us\\s+',ignore_case = T)))
+Neither_full <-  new_data_solidarity%>%dplyr::filter(!str_detect(text,regex('I\\s+|Me\\s+|Mine\\s+|My\\s+|i\\s+|me\\s+|mine\\s+|my\\s+',ignore_case = T)))%>%dplyr::filter(!str_detect(text,regex('We\\s+|Our\\s+|Ours\\s+|Us\\s+|we\\s+|our\\s+|ours\\s+|us\\s+',ignore_case = T)))
+```
+
+```{r}
+I_full <-  new_data_solidarity%>%dplyr::filter(str_detect(text,"i "))
+We_full <-  new_data_solidarity%>%dplyr::filter(str_detect(text,"we "))
+Neither_full <-  new_data_solidarity%>%dplyr::filter(!str_detect(text,"i "))%>%dplyr::filter(!str_detect(text,"we "))
+```
+
+## count each pronoun
+
+```{r}
+all_words <- data.frame(table(unlist(strsplit(tolower(data_solidarity$body), " "))))
+all_words
+```
+
+```{r}
+I_all_count = all_words[all_words$Var1=="i", ]
+me_all_count = all_words[all_words$Var1=="me", ]
+my_all_count = all_words[all_words$Var1=="my", ]
+mine_all_count = all_words[all_words$Var1=="mine", ]
+
+We_all_count = all_words[all_words$Var1=="we", ]
+Us_all_count = all_words[all_words$Var1=="us", ]
+Our_all_count = all_words[all_words$Var1=="our", ]
+Ours_all_count = all_words[all_words$Var1=="ours", ]
+
+```
+
+```{r}
+all_words[all_words$Var1=="i", ]
+```
+
+```{r}
+Ours_all_count
+```
+
+## I
+```{r}
+library(tm)
+#Create a vector containing only the text
+text <- I_full$text
+text <- cleanPosts(I_full$text)
+# Create a corpus  
+docs <- Corpus(VectorSource(text))
+docs <- docs %>%
+  tm_map(removeNumbers) %>%
+  tm_map(removePunctuation) %>%
+  tm_map(stripWhitespace)
+docs <- tm_map(docs, content_transformer(tolower))
+docs <- tm_map(docs, removeWords, stopwords("english"))
+dtm <- TermDocumentMatrix(docs) 
+matrix <- as.matrix(dtm) 
+words <- sort(rowSums(matrix),decreasing=TRUE) 
+df <- data.frame(word = names(words),freq=words)
+
+```
+
+```{r}
+install.packages("wordcloud")
+install.packages("RColorBrewer")
+```
+
+```{r}
+library(wordcloud)
+library(RColorBrewer)
+
+set.seed(1234) # for reproducibility 
+wordcloud(words = df$word, freq = df$freq, min.freq = 1,           max.words=200, random.order=FALSE, rot.per=0.35,            colors=brewer.pal(8, "Dark2"))
+```
+
+
+## WE
+```{r}
+library(tm)
+#Create a vector containing only the text
+text <- We_full$text
+text <- cleanPosts(We_full$text)
+# Create a corpus  
+docs <- Corpus(VectorSource(text))
+docs <- docs %>%
+  tm_map(removeNumbers) %>%
+  tm_map(removePunctuation) %>%
+  tm_map(stripWhitespace)
+docs <- tm_map(docs, content_transformer(tolower))
+docs <- tm_map(docs, removeWords, stopwords("english"))
+dtm <- TermDocumentMatrix(docs) 
+matrix <- as.matrix(dtm) 
+words <- sort(rowSums(matrix),decreasing=TRUE) 
+df <- data.frame(word = names(words),freq=words)
+
+```
+
+
+```{r}
+library(wordcloud)
+library(RColorBrewer)
+
+set.seed(1234) # for reproducibility 
+wordcloud(words = df$word, freq = df$freq, min.freq = 1,           max.words=200, random.order=FALSE, rot.per=0.35,            colors=brewer.pal(8, "Dark2"))
+```
+
+## Neither
+```{r}
+library(tm)
+#Create a vector containing only the text
+text <- Neither_full$text
+text <- cleanPosts(Neither_full$text)
+# Create a corpus  
+docs <- Corpus(VectorSource(text))
+docs <- docs %>%
+  tm_map(removeNumbers) %>%
+  tm_map(removePunctuation) %>%
+  tm_map(stripWhitespace)
+docs <- tm_map(docs, content_transformer(tolower))
+docs <- tm_map(docs, removeWords, stopwords("english"))
+dtm <- TermDocumentMatrix(docs) 
+matrix <- as.matrix(dtm) 
+words <- sort(rowSums(matrix),decreasing=TRUE) 
+df <- data.frame(word = names(words),freq=words)
+
+```
+
+
+```{r}
+library(wordcloud)
+library(RColorBrewer)
+
+set.seed(1234) # for reproducibility 
+wordcloud(words = df$word, freq = df$freq, min.freq = 1,           max.words=200, random.order=FALSE, rot.per=0.35,            colors=brewer.pal(8, "Dark2"))
+```
+
+```{r}
+I_emoji <-  tweets_classified%>%dplyr::filter(str_detect(text,regex('I\\s+ |Me\\s+|Mine\\s+|My\\s+|i\\s+|me\\s+|mine\\s+|my\\s+',ignore_case = T)))
+We_emoji <-  tweets_classified%>%dplyr::filter(str_detect(text,regex('We\\s+|Our\\s+|Ours\\s+|Us\\s+|we\\s+|our\\s+|ours\\s+|us\\s+',ignore_case = T)))
+Neither_emoji <-  tweets_classified%>%dplyr::filter(!str_detect(text,'I|Me|Mine|My|i|me|mine|my'))%>%dplyr::filter(!str_detect(text,regex('I\\s+|Me\\s+|Mine\\s+|My\\s+|i\\s+|me\\s+|mine\\s+|my\\s+',ignore_case = T)))%>%dplyr::filter(!str_detect(text,regex('We\\s+|Our\\s+|Ours\\s+|Us\\s+|we\\s+|our\\s+|ours\\s+|us\\s+',ignore_case = T)))
+```
+
+## Get Tweet count
+```{r}
+tweets_classified$face_count[tweets_classified$face_count > 0] <- 1 
+tweets_classified$object_count[tweets_classified$object_count > 0] <- 1 
+tweets_classified$gesture_count[tweets_classified$gesture_count > 0] <- 1 
+```
+
+```{r}
+tweets_classified
+```
+##Get Unique Count
+```{r}
+I_emoji_face = subset(I_emoji,(face_count!=0 & object_count==0 & gesture_count==0))
+I_emoji_object = subset(I_emoji,(face_count==0 & object_count!=0 & gesture_count==0))
+I_emoji_gesture = subset(I_emoji,(face_count==0 & object_count==0 & gesture_count!=0))
+We_emoji_face = subset(We_emoji,(face_count!=0 & object_count==0 & gesture_count==0))
+We_emoji_object = subset(We_emoji,(face_count==0 & object_count!=0 & gesture_count==0))
+We_emoji_gesture = subset(We_emoji,(face_count==0 & object_count==0 & gesture_count!=0))
+Neither_emoji_face = subset(Neither_emoji,(face_count!=0 & object_count==0 & gesture_count==0))
+Neither_emoji_object = subset(Neither_emoji,(face_count==0 & object_count!=0 & gesture_count==0))
+Neither_emoji_gesture = subset(Neither_emoji,(face_count==0 & object_count==0 & gesture_count!=0))
+```
+
+```{r}
+sum(I_emoji_face$total_unique_count)
+sum(I_emoji_object$total_unique_count)
+sum(I_emoji_gesture$total_unique_count)
+sum(We_emoji_face$total_unique_count)
+sum(We_emoji_object$total_unique_count)
+sum(We_emoji_gesture$total_unique_count)
+sum(Neither_emoji_face$total_unique_count)
+sum(Neither_emoji_object$total_unique_count)
+sum(Neither_emoji_gesture$total_unique_count)
+
+```
+
+
+```{r}
+write.csv(tweets_classified,"tweets_classified.csv")
+```
+
+```{r}
+library(dplyr)
+#require(parallel) 
+rank_face_solidarity_face <- raw_tweets%>%group_by(description)%>%dplyr::summarise(count=sum(count))%>%arrange(-count)
+```
+
+```{r}
+head(rank_face_solidarity_face,5)
+```
+
+
+
+
+#get the rank of emoji's in solidarity tweets
+```{r}
+library(dplyr)
+require(parallel) 
+raw_tweets <- parallel_match(new_data_solidarity$text, new_matchto, new_description, mc.cores=4)%>% 
+  filter(text != "") %>% filter(!is.na(count)) 
+  
+```
+
+```{r}
+head(raw_tweets, 5)
+```
+
+```{r}
+unique(raw_tweets$description)
+```
+
+```{r}
+library(dplyr)
+#require(parallel) 
+rank_face_solidarity <- raw_tweets%>%group_by(description)%>%dplyr::summarise(count=sum(count))%>%arrange(-count)
+```
+
+
+
+```{r}
+all_combined<- Reduce(function(x, y) merge(x, y, all=TRUE), list(rank_face_solidarity_face, rank_face_solidarity_object))
+```
+
+
+```{r}
+head(rank_face_solidarity,5)
+```
+
+```{r}
+all_combined_rank <- all_combined%>%group_by(description)%>%dplyr::summarise(count=sum(count))%>%arrange(-count)
+```
+
+
+```{r}
+face = rank_face_solidarity%>%select(description, count)%>%dplyr::filter(str_detect(description,"face"))
+```
+
+
+```{r}
+write.csv(rank_face_solidarity_object,"all_emoji_in_face_object_tweets.csv")
+```
+
+
+
+```{r}
+ ##Remove emoji
+corpus_en_face_emoji <- iconv(face_only$text, "latin1", "ASCII", sub="")
+### remove retweet entities
+corpus_en_face_emoji <-  gsub("(RT|via)((?:\\b\\W*@\\w+)+)", "", corpus_en_face_emoji) 
+corpus_en_face_emoji <- Corpus(VectorSource(corpus_en_face_emoji))
+##convert text to lowercase
+corpus_en_face_emoji <- tm_map(corpus_en_face_emoji,tolower)
+#inspect(corpus[1:5])
+##remove punctuations from text
+corpus_en_face_emoji <- tm_map(corpus_en_face_emoji,removePunctuation)
+##remove numbers from text
+corpus_en_face_emoji <- tm_map(corpus_en_face_emoji,removeNumbers)
+#inspect(corpus[1:5])
+##remove stopwords from french language 
+##corpus_USA_en_emoji <- tm_map(corpus_USA_en_emoji,removeWords,stopwords("en"))
+##remove url from text
+removeURL <- function(x) gsub("http[[:alnum:]]*",'',x)
+cleaned_corpus_en_face_emoji <- tm_map(corpus_en_face_emoji,content_transformer(removeURL))
+#inspect(cleaned_corpus[1:5])
+##remove emoticons
+removeEmoticons <- function(x) gsub("(?::|;|=)(?:-)?(?:\\)|\\(|D|P)",'',x)
+cleaned_corpus_en_face_emoji <- tm_map(cleaned_corpus_en_face_emoji,content_transformer(removeEmoticons))
+   
+##remove white space
+cleaned_corpus_en_face_emoji <- tm_map(cleaned_corpus_en_face_emoji,stripWhitespace)
+###
+cleaned_corpus_en_face_emoji <- tm_map(cleaned_corpus_en_face_emoji,removeWords,c('paris'))
+cleaned_corpus_en_face_emoji <- tm_map(cleaned_corpus_en_face_emoji,stripWhitespace)
+##average word length before stemming
+# split words
+words_list = strsplit(cleaned_corpus_en_face_emoji$content," ")
+wsize_per_tweet = sapply(words_list, function(x) mean(nchar(x)))
+avg_word_len = mean(wsize_per_tweet,na.rm=TRUE)
+avg_word_len
+##Stemming
+cleaned_corpus_en_face_emoji <- tm_map(cleaned_corpus_en_face_emoji,stemDocument)
+cleaned_corpus_en_face_emoji <- tm_map(cleaned_corpus_en_face_emoji,stripWhitespace)
+##avg tweet length
+avg_tweet_len <- mean(sapply(cleaned_corpus_en_face_emoji,function(x)length(unlist(gregexpr(" ",x)))+1))
+avg_tweet_len
+length(cleaned_corpus_en_face_emoji)
+#inspect(cleaned_corpus_en_emoji[1:25])
+```
+
+
+```{r}
+sapply(cleaned_corpus_en_face_emoji,function(x)length(unlist(gregexpr(" ",x)))+1)
+```
+
+```{r}
+bootstrapped_tweetlength <- sapply(cleaned_corpus_en_face_emoji,function(x)length(unlist(gregexpr(" ",x)))+1)
+```
+
+```{r}
+bootstrapped_wordlength <- sapply(strsplit(cleaned_corpus_en_face_emoji$content," "), function(x) mean(nchar(x)))
+```
+
+```{r}
+bootstrapped_wordlength<-as.data.frame(bootstrapped_wordlength)
+names(bootstrapped_wordlength)[1]<-"Word_Length"
+```
+
+
+```{r}
+bootstrapped_wordlength
+```
+
+```{r}
+face_boot_word<-cbind(bootstrapped_wordlength,isEmoji=1)
+```
+
+```{r}
+bootstrapped_tweetlength
+```
+
+
+
+```{r}
+bootstrapped_tweetlength<-as.data.frame(bootstrapped_tweetlength)
+names(bootstrapped_tweetlength)[1]<-"Tweet_Length"
+```
+
+
+```{r}
+face_boot<-cbind(bootstrapped_tweetlength,isEmoji=1)
+```
+
+```{r}
+tdm <- TermDocumentMatrix(cleaned_corpus_en_face_emoji)
+#tdm <- as.matrix(tdm)
+#print(tdm[1:10,1:20])
+#tdm
+#tdm <- as.matrix(tdm)
+freqSum_en_face_emoji <- slam::row_sums(tdm, na.rm = T)
+#apply(tdm, 1, sum)
+#freqSum_USA_en <- rowSums(tdm)
+#freqSum_France_fr 
+H=Shannon(freqSum_en_face_emoji)/log(2)
+H
+```
+
+```{r}
+install.packages("iNEXT")
+```
+
+```{r}
+library("iNEXT")
+var<-ChaoShannon(freqSum_en_face_emoji, datatype = "abundance", conf = 0.95)/log(2)
+```
+
+```{r}
+var
+```
+
+
+
+
+```{r}
+ ##Remove emoji
+corpus_en_non_face_emoji <- iconv(object_only$text, "latin1", "ASCII", sub="")
+### remove retweet entities
+corpus_en_non_face_emoji <-  gsub("(RT|via)((?:\\b\\W*@\\w+)+)", "", corpus_en_non_face_emoji) 
+corpus_en_non_face_emoji <- Corpus(VectorSource(corpus_en_non_face_emoji))
+##convert text to lowercase
+corpus_en_non_face_emoji <- tm_map(corpus_en_non_face_emoji,tolower)
+#inspect(corpus[1:5])
+##remove punctuations from text
+corpus_en_non_face_emoji <- tm_map(corpus_en_non_face_emoji,removePunctuation)
+##remove numbers from text
+corpus_en_non_face_emoji <- tm_map(corpus_en_non_face_emoji,removeNumbers)
+#inspect(corpus[1:5])
+##remove stopwords from french language 
+##corpus_USA_en_emoji <- tm_map(corpus_USA_en_emoji,removeWords,stopwords("en"))
+##remove url from text
+removeURL <- function(x) gsub("http[[:alnum:]]*",'',x)
+cleaned_corpus_en_non_face_emoji <- tm_map(corpus_en_non_face_emoji,content_transformer(removeURL))
+#inspect(cleaned_corpus[1:5])
+##remove emoticons
+removeEmoticons <- function(x) gsub("(?::|;|=)(?:-)?(?:\\)|\\(|D|P)",'',x)
+cleaned_corpus_en_non_face_emoji <- tm_map(cleaned_corpus_en_non_face_emoji,content_transformer(removeEmoticons))
+   
+##remove white space
+cleaned_corpus_en_non_face_emoji <- tm_map(cleaned_corpus_en_non_face_emoji,stripWhitespace)
+###
+cleaned_corpus_en_non_face_emoji <- tm_map(cleaned_corpus_en_non_face_emoji,removeWords,c('paris'))
+cleaned_corpus_en_non_face_emoji <- tm_map(cleaned_corpus_en_non_face_emoji,stripWhitespace)
+##average word length before stemming
+# split words
+words_list = strsplit(cleaned_corpus_en_non_face_emoji$content," ")
+wsize_per_tweet = sapply(words_list, function(x) mean(nchar(x)))
+avg_word_len = mean(wsize_per_tweet,na.rm=TRUE)
+avg_word_len
+##Stemming
+cleaned_corpus_en_non_face_emoji <- tm_map(cleaned_corpus_en_non_face_emoji,stemDocument)
+cleaned_corpus_en_non_face_emoji <- tm_map(cleaned_corpus_en_non_face_emoji,stripWhitespace)
+##avg tweet length
+avg_tweet_len <- mean(sapply(cleaned_corpus_en_non_face_emoji,function(x)length(unlist(gregexpr(" ",x)))+1))
+avg_tweet_len
+length(cleaned_corpus_en_non_face_emoji)
+#inspect(cleaned_corpus_en_emoji[1:25])
+```
+
+
+```{r}
+bootstrapped_tweetlength <- sapply(cleaned_corpus_en_non_face_emoji,function(x)length(unlist(gregexpr(" ",x)))+1)
+```
+
+```{r}
+bootstrapped_tweetlength
+```
+
+
+```{r}
+bootstrapped_tweetlength<-as.data.frame(bootstrapped_tweetlength)
+names(bootstrapped_tweetlength)[1]<-"Tweet_Length"
+```
+
+```{r}
+non_face_boot<-cbind(bootstrapped_tweetlength,isEmoji=2)
+```
+
+
+```{r}
+bootstrapped_wordlength <- sapply(strsplit(cleaned_corpus_en_non_face_emoji$content," "), function(x) mean(nchar(x)))
+```
+
+```{r}
+bootstrapped_wordlength<-as.data.frame(bootstrapped_wordlength)
+names(bootstrapped_wordlength)[1]<-"Word_Length"
+```
+
+
+```{r}
+bootstrapped_wordlength
+```
+
+```{r}
+non_face_boot_word<-cbind(bootstrapped_wordlength,isEmoji=2)
+```
+
+```{r}
+unique(boot$isFaceEmoji)
+```
+
+```{r}
+grouped_non_face_emoji_tweets
+```
+
+```{r}
+tdm <- TermDocumentMatrix(cleaned_corpus_en_non_face_emoji[1:110])
+#tdm <- as.matrix(tdm)
+#print(tdm[1:10,1:20])
+#tdm
+#tdm <- as.matrix(tdm)
+freqSum_en_non_face <- slam::row_sums(tdm, na.rm = T)
+#apply(tdm, 1, sum)
+#freqSum_USA_en <- rowSums(tdm)
+#freqSum_France_fr 
+H=Shannon(freqSum_en_non_face)/log(2)
+H
+```
+
+
+```{r}
+library("iNEXT")
+var<-ChaoShannon(freqSum_en_non_face, datatype = "abundance", conf = 0.95)/log(2)
+```
+
+```{r}
+var
+```
+
+
+
+```{r}
+ ##Remove emoji
+corpus_en_gesture_emoji <- iconv(gesture_only$text, "latin1", "ASCII", sub="")
+### remove retweet entities
+corpus_en_gesture_emoji <-  gsub("(RT|via)((?:\\b\\W*@\\w+)+)", "", corpus_en_gesture_emoji) 
+corpus_en_gesture_emoji <- Corpus(VectorSource(corpus_en_gesture_emoji))
+##convert text to lowercase
+corpus_en_gesture_emoji <- tm_map(corpus_en_gesture_emoji,tolower)
+#inspect(corpus[1:5])
+##remove punctuations from text
+corpus_en_gesture_emoji <- tm_map(corpus_en_gesture_emoji,removePunctuation)
+##remove numbers from text
+corpus_en_gesture_emoji <- tm_map(corpus_en_gesture_emoji,removeNumbers)
+#inspect(corpus[1:5])
+##remove stopwords from french language 
+##corpus_USA_en_emoji <- tm_map(corpus_USA_en_emoji,removeWords,stopwords("en"))
+##remove url from text
+removeURL <- function(x) gsub("http[[:alnum:]]*",'',x)
+cleaned_corpus_en_gesture_emoji <- tm_map(corpus_en_gesture_emoji,content_transformer(removeURL))
+#inspect(cleaned_corpus[1:5])
+##remove emoticons
+removeEmoticons <- function(x) gsub("(?::|;|=)(?:-)?(?:\\)|\\(|D|P)",'',x)
+cleaned_corpus_en_gesture_emoji <- tm_map(cleaned_corpus_en_gesture_emoji,content_transformer(removeEmoticons))
+   
+##remove white space
+cleaned_corpus_en_gesture_emoji <- tm_map(cleaned_corpus_en_gesture_emoji,stripWhitespace)
+###
+cleaned_corpus_en_gesture_emoji <- tm_map(cleaned_corpus_en_gesture_emoji,removeWords,c('paris'))
+cleaned_corpus_en_gesture_emoji <- tm_map(cleaned_corpus_en_gesture_emoji,stripWhitespace)
+##average word length before stemming
+# split words
+words_list = strsplit(cleaned_corpus_en_gesture_emoji$content," ")
+wsize_per_tweet = sapply(words_list, function(x) mean(nchar(x)))
+avg_word_len = mean(wsize_per_tweet,na.rm=TRUE)
+avg_word_len
+##Stemming
+cleaned_corpus_en_gesture_emoji <- tm_map(cleaned_corpus_en_gesture_emoji,stemDocument)
+cleaned_corpus_en_gesture_emoji <- tm_map(cleaned_corpus_en_gesture_emoji,stripWhitespace)
+##avg tweet length
+avg_tweet_len <- mean(sapply(cleaned_corpus_en_gesture_emoji,function(x)length(unlist(gregexpr(" ",x)))+1))
+avg_tweet_len
+length(cleaned_corpus_en_gesture_emoji)
+#inspect(cleaned_corpus_en_emoji[1:25])
+```
+
+
+```{r}
+bootstrapped_tweetlength <- sapply(cleaned_corpus_en_gesture_emoji,function(x)length(unlist(gregexpr(" ",x)))+1)
+```
+
+```{r}
+bootstrapped_tweetlength
+```
+
+
+```{r}
+bootstrapped_tweetlength<-as.data.frame(bootstrapped_tweetlength)
+names(bootstrapped_tweetlength)[1]<-"Tweet_Length"
+```
+
+```{r}
+gesture_boot<-cbind(bootstrapped_tweetlength,isEmoji=3)
+```
+
+```{r}
+bootstrapped_wordlength <- sapply(strsplit(cleaned_corpus_en_gesture_emoji$content," "), function(x) mean(nchar(x)))
+```
+
+```{r}
+bootstrapped_wordlength<-as.data.frame(bootstrapped_wordlength)
+names(bootstrapped_wordlength)[1]<-"Word_Length"
+```
+
+
+```{r}
+bootstrapped_wordlength
+```
+
+```{r}
+gesture_boot_word<-cbind(bootstrapped_wordlength,isEmoji=3)
+```
+
+
+```{r}
+unique(boot$isFaceEmoji)
+```
+
+```{r}
+grouped_non_face_emoji_tweets
+```
+
+```{r}
+tdm <- TermDocumentMatrix(cleaned_corpus_en_gesture_emoji[1:110])
+#tdm <- as.matrix(tdm)
+#print(tdm[1:10,1:20])
+#tdm
+#tdm <- as.matrix(tdm)
+freqSum_en_gesture_face <- slam::row_sums(tdm, na.rm = T)
+#apply(tdm, 1, sum)
+#freqSum_USA_en <- rowSums(tdm)
+#freqSum_France_fr 
+H=Shannon(freqSum_en_gesture_face)/log(2)
+H
+```
+
+
+```{r}
+library("iNEXT")
+var<-ChaoShannon(freqSum_en_gesture_face, datatype = "abundance", conf = 0.95)/log(2)
+```
+
+```{r}
+var
+```
+
+```{r}
+corpus_en <- data_solidarity$body
+corpus_en_emoji <- raw_tweets$text
+corpus_en_NO_emoji_text <- subset(corpus_en, !(corpus_en %in% c(corpus_en_emoji)))
+corpus_en_NO_emoji_text <- as.data.frame(unique(corpus_en_NO_emoji_text))
+names(corpus_en_NO_emoji_text)[1]<-"tweets"
+```
+
+##With Emojis Combined
+
+```{r}
+ ##Remove emoji
+corpus_en_emoji <- iconv(corpus_en_emoji, "latin1", "ASCII", sub="")
+### remove retweet entities
+corpus_en_emoji <-  gsub("(RT|via)((?:\\b\\W*@\\w+)+)", "", corpus_en_emoji) 
+corpus_en_emoji <- Corpus(VectorSource(corpus_en_emoji))
+##convert text to lowercase
+corpus_en_emoji <- tm_map(corpus_en_emoji,tolower)
+#inspect(corpus[1:5])
+##remove punctuations from text
+corpus_en_emoji <- tm_map(corpus_en_emoji,removePunctuation)
+##remove numbers from text
+corpus_en_emoji <- tm_map(corpus_en_emoji,removeNumbers)
+#inspect(corpus[1:5])
+##remove stopwords from french language 
+##corpus_USA_en_emoji <- tm_map(corpus_USA_en_emoji,removeWords,stopwords("en"))
+##remove url from text
+removeURL <- function(x) gsub("http[[:alnum:]]*",'',x)
+cleaned_corpus_en_emoji <- tm_map(corpus_en_emoji,content_transformer(removeURL))
+#inspect(cleaned_corpus[1:5])
+##remove emoticons
+removeEmoticons <- function(x) gsub("(?::|;|=)(?:-)?(?:\\)|\\(|D|P)",'',x)
+cleaned_corpus_en_emoji <- tm_map(cleaned_corpus_en_emoji,content_transformer(removeEmoticons))
+   
+##remove white space
+cleaned_corpus_en_emoji <- tm_map(cleaned_corpus_en_emoji,stripWhitespace)
+###
+cleaned_corpus_en_emoji <- tm_map(cleaned_corpus_en_emoji,removeWords,c('paris'))
+cleaned_corpus_en_emoji <- tm_map(cleaned_corpus_en_emoji,stripWhitespace)
+##average word length before stemming
+# split words
+words_list = strsplit(cleaned_corpus_en_emoji$content," ")
+wsize_per_tweet = sapply(words_list, function(x) mean(nchar(x)))
+avg_word_len = mean(wsize_per_tweet,na.rm=TRUE)
+avg_word_len
+##Stemming
+cleaned_corpus_en_emoji <- tm_map(cleaned_corpus_en_emoji,stemDocument)
+cleaned_corpus_en_emoji <- tm_map(cleaned_corpus_en_emoji,stripWhitespace)
+##avg tweet length
+avg_tweet_len <- mean(sapply(cleaned_corpus_en_emoji,function(x)length(unlist(gregexpr(" ",x)))+1))
+avg_tweet_len
+length(cleaned_corpus_en_emoji)
+#inspect(cleaned_corpus_en_emoji[1:25])
+```
+
+
+```{r}
+tdm <- TermDocumentMatrix(cleaned_corpus_en_emoji)
+#tdm <- as.matrix(tdm)
+#print(tdm[1:10,1:20])
+#tdm
+#tdm <- as.matrix(tdm)
+freqSum_en_emoji <- slam::row_sums(tdm, na.rm = T)
+#apply(tdm, 1, sum)
+#freqSum_USA_en <- rowSums(tdm)
+#freqSum_France_fr 
+H=Shannon(freqSum_en_emoji)/log(2)
+H
+```
+
+#With Emoji WordCLoud
+```{r}
+library(tm)
+#Create a vector containing only the text
+text <- corpus_en_emoji
+text <- cleanPosts(corpus_en_emoji)
+# Create a corpus  
+docs <- Corpus(VectorSource(text))
+docs <- docs %>%
+  tm_map(removeNumbers) %>%
+  tm_map(removePunctuation) %>%
+  tm_map(stripWhitespace)
+docs <- tm_map(docs, content_transformer(tolower))
+docs <- tm_map(docs, removeWords, stopwords("english"))
+dtm <- TermDocumentMatrix(docs) 
+matrix <- as.matrix(dtm) 
+words <- sort(rowSums(matrix),decreasing=TRUE) 
+df <- data.frame(word = names(words),freq=words)
+
+```
+
+```{r}
+install.packages("wordcloud")
+install.packages("RColorBrewer")
+```
+
+```{r}
+library(wordcloud)
+library(RColorBrewer)
+
+set.seed(1234) # for reproducibility 
+wordcloud(words = df$word, freq = df$freq, min.freq = 1,           max.words=200, random.order=FALSE, rot.per=0.35,            colors=brewer.pal(8, "Dark2"))
+```
+
+
+```{r}
+library("iNEXT")
+var<-ChaoShannon(freqSum_en_emoji, datatype = "abundance", conf = 0.95)/log(2)
+```
+
+```{r}
+var
+```
+
+```{r}
+corpus_en_NO_emoji_text[1]
+```
+
+```{r}
+ ##Remove emoji
+corpus_en_NO_emoji <- iconv(corpus_en_NO_emoji_text$tweets, "latin1", "ASCII", sub="")
+### remove retweet entities
+corpus_en_NO_emoji <-  gsub("(RT|via)((?:\\b\\W*@\\w+)+)", "", corpus_en_NO_emoji) 
+corpus_en_NO_emoji <- Corpus(VectorSource(corpus_en_NO_emoji))
+##convert text to lowercase
+corpus_en_NO_emoji <- tm_map(corpus_en_NO_emoji,tolower)
+#inspect(corpus[1:5])
+##remove punctuations from text
+corpus_en_NO_emoji <- tm_map(corpus_en_NO_emoji,removePunctuation)
+##remove numbers from text
+corpus_en_NO_emoji <- tm_map(corpus_en_NO_emoji,removeNumbers)
+#inspect(corpus[1:5])
+##remove stopwords from french language 
+##corpus_USA_en_emoji <- tm_map(corpus_USA_en_emoji,removeWords,stopwords("en"))
+##remove url from text
+removeURL <- function(x) gsub("http[[:alnum:]]*",'',x)
+cleaned_corpus_en_No_emoji <- tm_map(corpus_en_NO_emoji,content_transformer(removeURL))
+#inspect(cleaned_corpus[1:5])
+##remove emoticons
+removeEmoticons <- function(x) gsub("(?::|;|=)(?:-)?(?:\\)|\\(|D|P)",'',x)
+cleaned_corpus_en_No_emoji <- tm_map(cleaned_corpus_en_No_emoji,content_transformer(removeEmoticons))
+   
+##remove white space
+cleaned_corpus_en_No_emoji <- tm_map(cleaned_corpus_en_No_emoji,stripWhitespace)
+###
+cleaned_corpus_en_No_emoji <- tm_map(cleaned_corpus_en_No_emoji,removeWords,c('paris'))
+cleaned_corpus_en_No_emoji <- tm_map(cleaned_corpus_en_No_emoji,stripWhitespace)
+##average word length before stemming
+# split words
+words_list = strsplit(cleaned_corpus_en_No_emoji$content," ")
+wsize_per_tweet = sapply(words_list, function(x) mean(nchar(x)))
+avg_word_len = mean(wsize_per_tweet,na.rm=TRUE)
+avg_word_len
+##Stemming
+cleaned_corpus_en_No_emoji <- tm_map(cleaned_corpus_en_No_emoji,stemDocument)
+cleaned_corpus_en_No_emoji <- tm_map(cleaned_corpus_en_No_emoji,stripWhitespace)
+##avg tweet length
+avg_tweet_len <- mean(sapply(cleaned_corpus_en_No_emoji,function(x)length(unlist(gregexpr(" ",x)))+1))
+avg_tweet_len
+length(cleaned_corpus_en_No_emoji)
+#inspect(cleaned_corpus_en_emoji[1:25])
+```
+
+
+#Without Emoji WordCLoud
+```{r}
+library(tm)
+#Create a vector containing only the text
+text <- corpus_en_NO_emoji_text$tweets
+text <- cleanPosts(corpus_en_NO_emoji_text$tweets)
+# Create a corpus  
+docs <- Corpus(VectorSource(text))
+docs <- docs %>%
+  tm_map(removeNumbers) %>%
+  tm_map(removePunctuation) %>%
+  tm_map(stripWhitespace)
+docs <- tm_map(docs, content_transformer(tolower))
+docs <- tm_map(docs, removeWords, stopwords("english"))
+dtm <- TermDocumentMatrix(docs) 
+matrix <- as.matrix(dtm) 
+words <- sort(rowSums(matrix),decreasing=TRUE) 
+df <- data.frame(word = names(words),freq=words)
+
+```
+
+```{r}
+install.packages("wordcloud")
+install.packages("RColorBrewer")
+```
+
+```{r}
+library(wordcloud)
+library(RColorBrewer)
+
+set.seed(1234) # for reproducibility 
+wordcloud(words = df$word, freq = df$freq, min.freq = 1,           max.words=200, random.order=FALSE, rot.per=0.35,            colors=brewer.pal(8, "Dark2"))
+```
+
+
+```{r}
+bootstrapped_tweetlength <- sapply(cleaned_corpus_en_No_emoji,function(x)length(unlist(gregexpr(" ",x)))+1)
+```
+
+```{r}
+bootstrapped_tweetlength
+```
+
+
+```{r}
+bootstrapped_tweetlength<-as.data.frame(bootstrapped_tweetlength)
+names(bootstrapped_tweetlength)[1]<-"Tweet_Length"
+```
+
+```{r}
+no_emoji_boot<-cbind(bootstrapped_tweetlength,isEmoji=0)
+```
+
+```{r}
+bootstrapped_wordlength <- sapply(strsplit(cleaned_corpus_en_No_emoji$content," "), function(x) mean(nchar(x)))
+```
+
+```{r}
+bootstrapped_wordlength<-as.data.frame(bootstrapped_wordlength)
+names(bootstrapped_wordlength)[1]<-"Word_Length"
+```
+
+
+```{r}
+bootstrapped_wordlength
+```
+
+```{r}
+no_emoji_boot_word<-cbind(bootstrapped_wordlength,isEmoji=0)
+```
+
+
+```{r}
+tdm <- TermDocumentMatrix(cleaned_corpus_en_No_emoji)
+#tdm <- as.matrix(tdm)
+#print(tdm[1:10,1:20])
+#tdm
+#tdm <- as.matrix(tdm)
+freqSum_en_no_emoji <- slam::row_sums(tdm, na.rm = T)
+#apply(tdm, 1, sum)
+#freqSum_USA_en <- rowSums(tdm)
+#freqSum_France_fr 
+H=Shannon(freqSum_en_no_emoji)/log(2)
+H
+```
+
+
+```{r}
+library("iNEXT")
+var<-ChaoShannon(freqSum_en_no_emoji, datatype = "abundance", conf = 0.95)/log(2)
+```
+
+```{r}
+var
+```
+
+#ANOVA ON TWEET LENGTH
+```{r}
+boot_combined<- Reduce(function(x, y) merge(x, y, all=TRUE), list(face_boot, non_face_boot,gesture_boot, no_emoji_boot))
+```
+
+```{r}
+unique(boot_combined$isEmoji)
+```
+
+```{r}
+boot_combined
+```
+
+```{r}
+boot_combined=read.csv2(file="VP_mono_eng.csv", header=TRUE, sep=",", stringsAsFactors = FALSE, fileEncoding = "UTF-8")
+```
+
+```{r}
+library(dplyr)
+group_by(boot_combined, isEmoji) %>%
+  dplyr::summarise(
+    count = n(),
+    mean = mean(Tweet_Length, na.rm = TRUE),
+    sd = sd(Tweet_Length, na.rm = TRUE)
+  )
+```
+### no assumption of equal variances
+```{r}
+oneway.test(Tweet_Length ~ isEmoji, data = boot_combined)
+```
+
+
+```{r}
+summary(aov(formula =Tweet_Length~isEmoji, data = boot_combined))
+```
+
+```{r}
+write.csv(boot_combined,"anova_analysis_charlottesville_tweetlength.csv")
+```
+
+
+#ANOVA ON WORD LENGTH
+```{r}
+boot_combined_word<- Reduce(function(x, y) merge(x, y, all=TRUE), list(face_boot_word, non_face_boot_word,gesture_boot_word, no_emoji_boot_word))
+```
+
+```{r}
+unique(boot_combined_word$isEmoji)
+```
+
+```{r}
+boot_combined_word
+```
+
+
+```{r}
+library(dplyr)
+group_by(boot_combined_word, isEmoji) %>%
+  dplyr::summarise(
+    count = n(),
+    mean = mean(Word_Length, na.rm = TRUE),
+    sd = sd(Word_Length, na.rm = TRUE)
+  )
+```
+### no assumption of equal variances
+```{r}
+oneway.test(Word_Length ~ isEmoji, data = boot_combined_word)
+```
+
+
+```{r}
+summary(aov(formula =Word_Length~isEmoji, data = boot_combined_word))
+```
+
+```{r}
+write.csv(boot_combined_word,"anova_analysis_charlottesville_wordlength.csv")
+```
+
+##Emoji
+
+##I tweets
+
+```{r}
+ ##Remove emoji
+corpus_en_I_emoji <- iconv(I_emoji$text, "latin1", "ASCII", sub="")
+### remove retweet entities
+corpus_en_I_emoji <-  gsub("(RT|via)((?:\\b\\W*@\\w+)+)", "", corpus_en_I_emoji) 
+corpus_en_I_emoji <- Corpus(VectorSource(corpus_en_I_emoji))
+##convert text to lowercase
+corpus_en_I_emoji <- tm_map(corpus_en_I_emoji,tolower)
+#inspect(corpus[1:5])
+##remove punctuations from text
+corpus_en_I_emoji <- tm_map(corpus_en_I_emoji,removePunctuation)
+##remove numbers from text
+corpus_en_I_emoji <- tm_map(corpus_en_I_emoji,removeNumbers)
+#inspect(corpus[1:5])
+##remove stopwords from french language 
+##corpus_USA_en_emoji <- tm_map(corpus_USA_en_emoji,removeWords,stopwords("en"))
+##remove url from text
+removeURL <- function(x) gsub("http[[:alnum:]]*",'',x)
+cleaned_corpus_en_I_emoji <- tm_map(corpus_en_I_emoji,content_transformer(removeURL))
+#inspect(cleaned_corpus[1:5])
+##remove emoticons
+removeEmoticons <- function(x) gsub("(?::|;|=)(?:-)?(?:\\)|\\(|D|P)",'',x)
+cleaned_corpus_en_I_emoji <- tm_map(cleaned_corpus_en_I_emoji,content_transformer(removeEmoticons))
+   
+##remove white space
+cleaned_corpus_en_I_emoji <- tm_map(cleaned_corpus_en_I_emoji,stripWhitespace)
+###
+cleaned_corpus_en_I_emoji <- tm_map(cleaned_corpus_en_I_emoji,removeWords,c('paris'))
+cleaned_corpus_en_I_emoji <- tm_map(cleaned_corpus_en_I_emoji,stripWhitespace)
+##average word length before stemming
+# split words
+words_list = strsplit(cleaned_corpus_en_I_emoji$content," ")
+wsize_per_tweet = sapply(words_list, function(x) mean(nchar(x)))
+avg_word_len = mean(wsize_per_tweet,na.rm=TRUE)
+avg_word_len
+##Stemming
+cleaned_corpus_en_I_emoji <- tm_map(cleaned_corpus_en_I_emoji,stemDocument)
+cleaned_corpus_en_I_emoji <- tm_map(cleaned_corpus_en_I_emoji,stripWhitespace)
+##avg tweet length
+avg_tweet_len <- mean(sapply(cleaned_corpus_en_I_emoji,function(x)length(unlist(gregexpr(" ",x)))+1))
+avg_tweet_len
+length(cleaned_corpus_en_I_emoji)
+#inspect(cleaned_corpus_en_emoji[1:25])
+```
+
+```{r}
+tdm <- TermDocumentMatrix(cleaned_corpus_en_I_emoji)
+#tdm <- as.matrix(tdm)
+#print(tdm[1:10,1:20])
+#tdm
+#tdm <- as.matrix(tdm)
+freqSum_en_I_emoji <- slam::row_sums(tdm, na.rm = T)
+#apply(tdm, 1, sum)
+#freqSum_USA_en <- rowSums(tdm)
+#freqSum_France_fr 
+H=Shannon(freqSum_en_I_emoji)/log(2)
+H
+```
+
+```{r}
+library("iNEXT")
+var<-ChaoShannon(freqSum_en_I_emoji, datatype = "abundance", conf = 0.95)/log(2)
+```
+
+```{r}
+var
+```
+
+##We Tweets
+
+```{r}
+ ##Remove emoji
+corpus_en_We_emoji <- iconv(We_emoji$text, "latin1", "ASCII", sub="")
+### remove retweet entities
+corpus_en_We_emoji <-  gsub("(RT|via)((?:\\b\\W*@\\w+)+)", "", corpus_en_We_emoji) 
+corpus_en_We_emoji <- Corpus(VectorSource(corpus_en_We_emoji))
+##convert text to lowercase
+corpus_en_We_emoji <- tm_map(corpus_en_We_emoji,tolower)
+#inspect(corpus[1:5])
+##remove punctuations from text
+corpus_en_We_emoji <- tm_map(corpus_en_We_emoji,removePunctuation)
+##remove numbers from text
+corpus_en_We_emoji <- tm_map(corpus_en_We_emoji,removeNumbers)
+#inspect(corpus[1:5])
+##remove stopwords from french language 
+##corpus_USA_en_emoji <- tm_map(corpus_USA_en_emoji,removeWords,stopwords("en"))
+##remove url from text
+removeURL <- function(x) gsub("http[[:alnum:]]*",'',x)
+cleaned_corpus_en_We_emoji <- tm_map(corpus_en_We_emoji,content_transformer(removeURL))
+#inspect(cleaned_corpus[1:5])
+##remove emoticons
+removeEmoticons <- function(x) gsub("(?::|;|=)(?:-)?(?:\\)|\\(|D|P)",'',x)
+cleaned_corpus_en_We_emoji <- tm_map(cleaned_corpus_en_We_emoji,content_transformer(removeEmoticons))
+   
+##remove white space
+cleaned_corpus_en_We_emoji <- tm_map(cleaned_corpus_en_We_emoji,stripWhitespace)
+###
+cleaned_corpus_en_We_emoji <- tm_map(cleaned_corpus_en_We_emoji,removeWords,c('paris'))
+cleaned_corpus_en_We_emoji <- tm_map(cleaned_corpus_en_We_emoji,stripWhitespace)
+##average word length before stemming
+# split words
+words_list = strsplit(cleaned_corpus_en_We_emoji$content," ")
+wsize_per_tweet = sapply(words_list, function(x) mean(nchar(x)))
+avg_word_len = mean(wsize_per_tweet,na.rm=TRUE)
+avg_word_len
+##Stemming
+cleaned_corpus_en_We_emoji <- tm_map(cleaned_corpus_en_We_emoji,stemDocument)
+cleaned_corpus_en_We_emoji <- tm_map(cleaned_corpus_en_We_emoji,stripWhitespace)
+##avg tweet length
+avg_tweet_len <- mean(sapply(cleaned_corpus_en_We_emoji,function(x)length(unlist(gregexpr(" ",x)))+1))
+avg_tweet_len
+length(cleaned_corpus_en_We_emoji)
+#inspect(cleaned_corpus_en_emoji[1:25])
+```
+
+```{r}
+tdm <- TermDocumentMatrix(cleaned_corpus_en_We_emoji)
+#tdm <- as.matrix(tdm)
+#print(tdm[1:10,1:20])
+#tdm
+#tdm <- as.matrix(tdm)
+freqSum_en_We_emoji <- slam::row_sums(tdm, na.rm = T)
+#apply(tdm, 1, sum)
+#freqSum_USA_en <- rowSums(tdm)
+#freqSum_France_fr 
+H=Shannon(freqSum_en_We_emoji)/log(2)
+H
+```
+
+```{r}
+library("iNEXT")
+var<-ChaoShannon(freqSum_en_We_emoji, datatype = "abundance", conf = 0.95)/log(2)
+```
+
+```{r}
+var
+```
+
+##Neither Tweets
+
+
+```{r}
+ ##Remove emoji
+corpus_en_Neither_emoji <- iconv(Neither_emoji$text, "latin1", "ASCII", sub="")
+### remove retweet entities
+corpus_en_Neither_emoji <-  gsub("(RT|via)((?:\\b\\W*@\\w+)+)", "", corpus_en_Neither_emoji) 
+corpus_en_Neither_emoji <- Corpus(VectorSource(corpus_en_Neither_emoji))
+##convert text to lowercase
+corpus_en_Neither_emoji <- tm_map(corpus_en_Neither_emoji,tolower)
+#inspect(corpus[1:5])
+##remove punctuations from text
+corpus_en_Neither_emoji <- tm_map(corpus_en_Neither_emoji,removePunctuation)
+##remove numbers from text
+corpus_en_Neither_emoji <- tm_map(corpus_en_Neither_emoji,removeNumbers)
+#inspect(corpus[1:5])
+##remove stopwords from french language 
+##corpus_USA_en_emoji <- tm_map(corpus_USA_en_emoji,removeWords,stopwords("en"))
+##remove url from text
+removeURL <- function(x) gsub("http[[:alnum:]]*",'',x)
+corpus_en_Neither_emoji <- tm_map(corpus_en_Neither_emoji,content_transformer(removeURL))
+#inspect(cleaned_corpus[1:5])
+##remove emoticons
+removeEmoticons <- function(x) gsub("(?::|;|=)(?:-)?(?:\\)|\\(|D|P)",'',x)
+cleaned_corpus_en_Neither_emoji <- tm_map(corpus_en_Neither_emoji,content_transformer(removeEmoticons))
+   
+##remove white space
+cleaned_corpus_en_Neither_emoji <- tm_map(cleaned_corpus_en_Neither_emoji,stripWhitespace)
+###
+cleaned_corpus_en_Neither_emoji <- tm_map(cleaned_corpus_en_Neither_emoji,removeWords,c('paris'))
+cleaned_corpus_en_Neither_emoji <- tm_map(cleaned_corpus_en_Neither_emoji,stripWhitespace)
+##average word length before stemming
+# split words
+words_list = strsplit(cleaned_corpus_en_Neither_emoji$content," ")
+wsize_per_tweet = sapply(words_list, function(x) mean(nchar(x)))
+avg_word_len = mean(wsize_per_tweet,na.rm=TRUE)
+avg_word_len
+##Stemming
+cleaned_corpus_en_Neither_emoji <- tm_map(cleaned_corpus_en_Neither_emoji,stemDocument)
+cleaned_corpus_en_Neither_emoji <- tm_map(cleaned_corpus_en_Neither_emoji,stripWhitespace)
+##avg tweet length
+avg_tweet_len <- mean(sapply(cleaned_corpus_en_Neither_emoji,function(x)length(unlist(gregexpr(" ",x)))+1))
+avg_tweet_len
+length(cleaned_corpus_en_Neither_emoji)
+#inspect(cleaned_corpus_en_emoji[1:25])
+```
+
+```{r}
+tdm <- TermDocumentMatrix(cleaned_corpus_en_Neither_emoji)
+#tdm <- as.matrix(tdm)
+#print(tdm[1:10,1:20])
+#tdm
+#tdm <- as.matrix(tdm)
+freqSum_en_Neither_emoji <- slam::row_sums(tdm, na.rm = T)
+#apply(tdm, 1, sum)
+#freqSum_USA_en <- rowSums(tdm)
+#freqSum_France_fr 
+H=Shannon(freqSum_en_Neither_emoji)/log(2)
+H
+```
+
+```{r}
+library("iNEXT")
+var<-ChaoShannon(freqSum_en_Neither_emoji, datatype = "abundance", conf = 0.95)/log(2)
+```
+
+```{r}
+var
+```
+
+
+##Count I each month
+
+
+```{r}
+#rm(new_data)
+
+I_data_solidarity <- I_full %>% dplyr::mutate(text=iconv(body, from = "latin1", to = "ascii", sub = "byte"))%>%dplyr::mutate(month=strftime(as.Date(postedTime, "%Y-%m-%d %H:%M:%S"), "%m"),date=strftime(as.Date(postedTime, "%Y-%m-%d %H:%M:%S"), "%d"))
+```
+
+
+```{r}
+I_text <- data.frame(orig_tweets=I_data_solidarity$text,month=I_data_solidarity$month,date=I_data_solidarity$date)
+```
+
+```{r}
+I_text
+```
+
+```{r}
+library(reshape2)
+library(ggplot2)
+# plot the data using ggplot2 and pipes
+counts_I <- table(I_text$month)
+barplot(counts_I, main="I Tweets Distribution", 
+   xlab="Month")
+```
+
+```{r}
+counts_I
+```
+
+```{r}
+I_august <- I_text %>% dplyr::filter(month=="08")
+```
+
+```{r}
+I_august
+```
+
+##For August
+
+##August We tweets
+
+```{r}
+We_august = We_text %>% dplyr::filter(month=="08")
+```
+
+```{r}
+We_gp <- cut(as.numeric(We_august$date), breaks=c(0,6,13,20,27,31))
+table(We_gp)
+```
+
+
+```{r}
+ ##Remove emoji
+corpus_en_We_Aug_full <- iconv(We_august$orig_tweets, "latin1", "ASCII", sub="")
+### remove retweet entities
+corpus_en_We_Aug_full <-  gsub("(RT|via)((?:\\b\\W*@\\w+)+)", "", corpus_en_We_Aug_full) 
+corpus_en_We_Aug_full <- Corpus(VectorSource(corpus_en_We_Aug_full))
+##convert text to lowercase
+corpus_en_We_Aug_full <- tm_map(corpus_en_We_Aug_full,tolower)
+#inspect(corpus[1:5])
+##remove punctuations from text
+corpus_en_We_Aug_full <- tm_map(corpus_en_We_Aug_full,removePunctuation)
+##remove numbers from text
+corpus_en_We_Aug_full <- tm_map(corpus_en_We_Aug_full,removeNumbers)
+#inspect(corpus[1:5])
+##remove stopwords from french language 
+##corpus_USA_en_emoji <- tm_map(corpus_USA_en_emoji,removeWords,stopwords("en"))
+##remove url from text
+removeURL <- function(x) gsub("http[[:alnum:]]*",'',x)
+corpus_en_We_Aug_full <- tm_map(corpus_en_We_Aug_full,content_transformer(removeURL))
+#inspect(cleaned_corpus[1:5])
+##remove emoticons
+removeEmoticons <- function(x) gsub("(?::|;|=)(?:-)?(?:\\)|\\(|D|P)",'',x)
+cleaned_corpus_en_We_Aug_full <- tm_map(corpus_en_We_Aug_full,content_transformer(removeEmoticons))
+   
+##remove white space
+cleaned_corpus_en_We_Aug_full <- tm_map(cleaned_corpus_en_We_Aug_full,stripWhitespace)
+###
+cleaned_corpus_en_We_Aug_full <- tm_map(cleaned_corpus_en_We_Aug_full,removeWords,c('paris'))
+cleaned_corpus_en_We_Aug_full <- tm_map(cleaned_corpus_en_We_Aug_full,stripWhitespace)
+##average word length before stemming
+# split words
+words_list = strsplit(cleaned_corpus_en_We_Aug_full$content," ")
+wsize_per_tweet = sapply(words_list, function(x) mean(nchar(x)))
+avg_word_len = mean(wsize_per_tweet,na.rm=TRUE)
+avg_word_len
+##Stemming
+cleaned_corpus_en_We_Aug_full <- tm_map(cleaned_corpus_en_We_Aug_full,stemDocument)
+cleaned_corpus_en_We_Aug_full <- tm_map(cleaned_corpus_en_We_Aug_full,stripWhitespace)
+##avg tweet length
+avg_tweet_len <- mean(sapply(cleaned_corpus_en_We_Aug_full,function(x)length(unlist(gregexpr(" ",x)))+1))
+avg_tweet_len
+length(cleaned_corpus_en_We_Aug_full)
+#inspect(cleaned_corpus_en_emoji[1:25])
+```
+
+```{r}
+tdm <- TermDocumentMatrix(cleaned_corpus_en_We_Aug_full)
+#tdm <- as.matrix(tdm)
+#print(tdm[1:10,1:20])
+#tdm
+#tdm <- as.matrix(tdm)
+freqSum_en_We_aug_full <- slam::row_sums(tdm, na.rm = T)
+#apply(tdm, 1, sum)
+#freqSum_USA_en <- rowSums(tdm)
+#freqSum_France_fr 
+H=Shannon(freqSum_en_We_aug_full)/log(2)
+H
+```
+
+```{r}
+library("iNEXT")
+var<-ChaoShannon(freqSum_en_We_aug_full, datatype = "abundance", conf = 0.95)/log(2)
+```
+
+```{r}
+var
+```
+
+
+##We
+
+```{r}
+#rm(new_data)
+
+We_data_solidarity <- We_full %>% dplyr::mutate(text=iconv(body, from = "latin1", to = "ascii", sub = "byte"))%>%dplyr::mutate(month=strftime(as.Date(postedTime, "%Y-%m-%d %H:%M:%S"), "%m"),date=strftime(as.Date(postedTime, "%Y-%m-%d %H:%M:%S"), "%d"))
+```
+
+
+```{r}
+We_text <- data.frame(orig_tweets=We_data_solidarity$text,month=We_data_solidarity$month,date=We_data_solidarity$date)
+```
+
+
+```{r}
+library(reshape2)
+library(ggplot2)
+# plot the data using ggplot2 and pipes
+counts_we <- table(We_text$month)
+barplot(counts, main="We Tweets Distribution", 
+   xlab="Month")
+```
+
+
+```{r}
+counts_we
+```
+
+
+##August I tweets
+
+```{r}
+I_august = I_text %>% dplyr::filter(month=="08")
+```
+
+```{r}
+class(I_august$date)
+```
+```{r}
+I_august %>% dplyr::filter(date=="07")
+```
+
+```{r}
+I_gp <- cut(as.numeric(I_august$date), breaks=c(0,6,13,20,27,31))
+table(I_gp)
+```
+
+```{r}
+ ##Remove emoji
+corpus_en_I_aug_full <- iconv(I_august$orig_tweets, "latin1", "ASCII", sub="")
+### remove retweet entities
+corpus_en_I_aug_full <-  gsub("(RT|via)((?:\\b\\W*@\\w+)+)", "", corpus_en_I_aug_full) 
+corpus_en_I_aug_full <- Corpus(VectorSource(corpus_en_I_aug_full))
+##convert text to lowercase
+corpus_en_I_aug_full <- tm_map(corpus_en_I_aug_full,tolower)
+#inspect(corpus[1:5])
+##remove punctuations from text
+corpus_en_I_aug_full <- tm_map(corpus_en_I_aug_full,removePunctuation)
+##remove numbers from text
+corpus_en_I_aug_full <- tm_map(corpus_en_I_aug_full,removeNumbers)
+#inspect(corpus[1:5])
+##remove stopwords from french language 
+##corpus_USA_en_emoji <- tm_map(corpus_USA_en_emoji,removeWords,stopwords("en"))
+##remove url from text
+removeURL <- function(x) gsub("http[[:alnum:]]*",'',x)
+corpus_en_I_aug_full <- tm_map(corpus_en_I_aug_full,content_transformer(removeURL))
+#inspect(cleaned_corpus[1:5])
+##remove emoticons
+removeEmoticons <- function(x) gsub("(?::|;|=)(?:-)?(?:\\)|\\(|D|P)",'',x)
+cleaned_corpus_en_I_aug_full <- tm_map(corpus_en_I_aug_full,content_transformer(removeEmoticons))
+   
+##remove white space
+cleaned_corpus_en_I_aug_full <- tm_map(cleaned_corpus_en_I_aug_full,stripWhitespace)
+###
+cleaned_corpus_en_I_aug_full <- tm_map(cleaned_corpus_en_I_aug_full,removeWords,c('paris'))
+cleaned_corpus_en_I_aug_full <- tm_map(cleaned_corpus_en_I_aug_full,stripWhitespace)
+##average word length before stemming
+# split words
+words_list = strsplit(cleaned_corpus_en_I_aug_full$content," ")
+wsize_per_tweet = sapply(words_list, function(x) mean(nchar(x)))
+avg_word_len = mean(wsize_per_tweet,na.rm=TRUE)
+avg_word_len
+##Stemming
+cleaned_corpus_en_I_aug_full <- tm_map(cleaned_corpus_en_I_aug_full,stemDocument)
+cleaned_corpus_en_I_aug_full <- tm_map(cleaned_corpus_en_I_aug_full,stripWhitespace)
+##avg tweet length
+avg_tweet_len <- mean(sapply(cleaned_corpus_en_I_aug_full,function(x)length(unlist(gregexpr(" ",x)))+1))
+avg_tweet_len
+length(cleaned_corpus_en_I_aug_full)
+#inspect(cleaned_corpus_en_emoji[1:25])
+```
+
+```{r}
+tdm <- TermDocumentMatrix(cleaned_corpus_en_I_aug_full)
+#tdm <- as.matrix(tdm)
+#print(tdm[1:10,1:20])
+#tdm
+#tdm <- as.matrix(tdm)
+freqSum_en_I_aug_full <- slam::row_sums(tdm, na.rm = T)
+#apply(tdm, 1, sum)
+#freqSum_USA_en <- rowSums(tdm)
+#freqSum_France_fr 
+H=Shannon(freqSum_en_I_aug_full)/log(2)
+H
+```
+
+```{r}
+library("iNEXT")
+var<-ChaoShannon(freqSum_en_I_aug_full, datatype = "abundance", conf = 0.95)/log(2)
+```
+
+```{r}
+var
+```
+
+##Neither Tweets
+
+```{r}
+#rm(new_data)
+
+Neither_data_solidarity <- Neither_full %>% dplyr::mutate(text=iconv(body, from = "latin1", to = "ascii", sub = "byte"))%>%dplyr::mutate(month=strftime(as.Date(postedTime, "%Y-%m-%d %H:%M:%S"), "%m"),date=strftime(as.Date(postedTime, "%Y-%m-%d %H:%M:%S"), "%d"))
+```
+
+
+```{r}
+Neither_text <- data.frame(orig_tweets=Neither_data_solidarity$text,month=Neither_data_solidarity$month,date=Neither_data_solidarity$date)
+```
+
+
+```{r}
+library(reshape2)
+library(ggplot2)
+# plot the data using ggplot2 and pipes
+counts_neither <- table(Neither_text$month)
+barplot(counts, main="Neither I/We Tweets Distribution", 
+   xlab="Month")
+```
+
+```{r}
+counts_neither
+```
+
+
+##August Neither tweets
+
+```{r}
+Neither_august = Neither_text %>% dplyr::filter(month=="08")
+```
+
+
+```{r}
+ ##Remove emoji
+corpus_en_Neither_aug_full <- iconv(Neither_august$orig_tweets, "latin1", "ASCII", sub="")
+### remove retweet entities
+corpus_en_Neither_aug_full <-  gsub("(RT|via)((?:\\b\\W*@\\w+)+)", "", corpus_en_Neither_aug_full) 
+corpus_en_Neither_aug_full <- Corpus(VectorSource(corpus_en_Neither_aug_full))
+##convert text to lowercase
+corpus_en_Neither_aug_full <- tm_map(corpus_en_Neither_aug_full,tolower)
+#inspect(corpus[1:5])
+##remove punctuations from text
+corpus_en_Neither_aug_full <- tm_map(corpus_en_Neither_aug_full,removePunctuation)
+##remove numbers from text
+corpus_en_Neither_aug_full <- tm_map(corpus_en_Neither_aug_full,removeNumbers)
+#inspect(corpus[1:5])
+##remove stopwords from french language 
+##corpus_USA_en_emoji <- tm_map(corpus_USA_en_emoji,removeWords,stopwords("en"))
+##remove url from text
+removeURL <- function(x) gsub("http[[:alnum:]]*",'',x)
+corpus_en_Neither_aug_full <- tm_map(corpus_en_Neither_aug_full,content_transformer(removeURL))
+#inspect(cleaned_corpus[1:5])
+##remove emoticons
+removeEmoticons <- function(x) gsub("(?::|;|=)(?:-)?(?:\\)|\\(|D|P)",'',x)
+cleaned_corpus_en_Neither_aug_full <- tm_map(corpus_en_Neither_aug_full,content_transformer(removeEmoticons))
+   
+##remove white space
+cleaned_corpus_en_Neither_aug_full <- tm_map(cleaned_corpus_en_Neither_aug_full,stripWhitespace)
+###
+cleaned_corpus_en_Neither_aug_full <- tm_map(cleaned_corpus_en_Neither_aug_full,removeWords,c('paris'))
+cleaned_corpus_en_Neither_aug_full <- tm_map(cleaned_corpus_en_Neither_aug_full,stripWhitespace)
+##average word length before stemming
+# split words
+words_list = strsplit(cleaned_corpus_en_Neither_aug_full$content," ")
+wsize_per_tweet = sapply(words_list, function(x) mean(nchar(x)))
+avg_word_len = mean(wsize_per_tweet,na.rm=TRUE)
+avg_word_len
+##Stemming
+cleaned_corpus_en_Neither_aug_full <- tm_map(cleaned_corpus_en_Neither_aug_full,stemDocument)
+cleaned_corpus_en_Neither_aug_full <- tm_map(cleaned_corpus_en_Neither_aug_full,stripWhitespace)
+##avg tweet length
+avg_tweet_len <- mean(sapply(cleaned_corpus_en_Neither_aug_full,function(x)length(unlist(gregexpr(" ",x)))+1))
+avg_tweet_len
+length(cleaned_corpus_en_Neither_aug_full)
+#inspect(cleaned_corpus_en_emoji[1:25])
+```
+
+```{r}
+tdm <- TermDocumentMatrix(cleaned_corpus_en_Neither_aug_full)
+#tdm <- as.matrix(tdm)
+#print(tdm[1:10,1:20])
+#tdm
+#tdm <- as.matrix(tdm)
+freqSum_en_Neither_aug_full <- slam::row_sums(tdm, na.rm = T)
+#apply(tdm, 1, sum)
+#freqSum_USA_en <- rowSums(tdm)
+#freqSum_France_fr 
+H=Shannon(freqSum_en_Neither_aug_full)/log(2)
+H
+```
+
+```{r}
+library("iNEXT")
+var<-ChaoShannon(freqSum_en_Neither_aug_full, datatype = "abundance", conf = 0.95)/log(2)
+```
+
+```{r}
+var
+```
+
+```{r}
+text = "We     like apple"
+str_detect(text,'I\\s+|We\\s+')
+```
+
+##irma
+```{r}
+#setwd("/Users/vsriniv6/Documents/paris_data")
+#folder <- "/Users/vsriniv6/Documents/paris_data/Irma/"      # path to folder that holds multiple .csv files
+folder <- "./Irma/"
+file_list <- list.files(path=folder, pattern="*.csv") # create list of all .csv files in folder
+
+# read in each .csv file in file_list and rbind them into a data frame called data_irma 
+data_irma <- 
+  do.call("rbind", 
+          lapply(file_list, 
+                 function(x) 
+                 read.csv(paste(folder, x, sep=''), 
+                 stringsAsFactors = FALSE, fileEncoding = "UTF-8")))
+
+names(data_irma)
+```
+
+```{r}
+data_new_Irma_es <- unique(subset(data_irma,lang%in%c("en","es"))%>%dplyr::filter(!str_detect(text,"(RT|via)((?:\\b\\W*@\\w+)+)")))
+```
+
+```{r}
+data_new_Irma_filter <-data_new_Irma_es%>%dplyr::filter(str_detect(text,"del hurricane|el hurricane|the huracán"))
+```
+
+
+##Pair of words
+```{r}
+wlist <- sapply( data_new_Irma_filter_es$text , strsplit , split = "\\W+", perl=TRUE)
+
+#  Paste word pairs together
+outl <- sapply( wlist , function(x) paste( head(x,-1) , tail(x,-1) , sep = " ") )
+```
+
+```{r}
+outl
+```
+
+```{r}
+hurricane = str_detect(outl,"hurricane")
+#es_hurricane
+```
+
+```{r}
+#  Table as per usual
+all_words <- data.frame(table(unlist( outl ) ))
+#all_words <- data.frame(table(unlist(strsplit(tolower(data_solidarity$body), " "))))
+all_words
+```
+
+
+```{r}
+#el_hurricane=all_words[all_words$Var1=="el hurricane", ]
+#del_hurricane=all_words[all_words$Var1=="del hurricane", ]
+the_hurricane=all_words[all_words$Var1=="the huracan", ]
+```

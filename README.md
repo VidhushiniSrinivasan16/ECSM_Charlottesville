@@ -3,14 +3,16 @@ Emoji Analysis on Charlottesville Solidarity tweets
 
 **Charlottesville dataset made available**
 ```
-Due to Twitter's restrictions, we are only able to share the tweet ID's and User ID's
+Due to Twitter's restrictions, we are only able to share the tweet ID's, User ID's and Annotations(-1 - Non Solidarity, 0 - Cannot be determined, 1- Solidarity)
 
 The Datasets are available in the dataset folder
 
-1. **Unite the Right rally - Charlottesville** - Id's(Tweet Id), Profile Id's(user_id) from tweets of "Unite the Right rally", Charlottesville from Feb 2017 to October 2017.
+1. **Unite the Right rally - Charlottesville** - Id's(Tweet Id), Profile Id's(user_id) and Annotations from tweets of "Unite the Right rally", Charlottesville from Feb 2017 to October 2017.
 ```
 
 This repository contains a mixture of codebase written in R (predominantly) and Python.
+
+We have used Solidarity tweets (Annotation == 1) for our Analysis.
 
 Please download the tweets with the help of the tweet IDs using this [repository](https://github.com/VidhushiniSrinivasan16/tweets_extraction) in Python or use the rtweet library for R.
 **Scripts**

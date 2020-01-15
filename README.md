@@ -8,7 +8,7 @@ Due to Twitter's restrictions, we are only able to share the tweet ID's and User
 We have annotated the tweets into following Categories:
 * -1 - Non Solidarity, 
 * 0 - Cannot be determined, 
-* 1 - Solidarity)
+* 1 - Solidarity
 
 These annotations are also made available along with tweet and User/Actor Id's.
 

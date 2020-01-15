@@ -21,6 +21,6 @@ Charlottesville_FaceObjectGestureEmoji_Analysis.Rmd - Charlottesville Tweets Ana
 
 all_emoji_in_corpus.csv - Emoji's in our corpus and their corresponding annotated Categories.
 
-Make_Dataset.ipynb - Code to extract tweet ID's and Actor ID's from our dataset
+Make_Dataset.ipynb - Code to extract tweet ID's, Actor ID's and Annotations from our dataset
 
 Please contact vsriniv6@uncc.edu if you have any further questions with regards to this project. 

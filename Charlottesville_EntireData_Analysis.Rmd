@@ -1447,16 +1447,23 @@ df <- data.frame(word = names(words),freq=words)
 ```
 
 ```{r}
-install.packages("wordcloud")
-install.packages("RColorBrewer")
+install.packages("wordcloud2")
+#install.packages("RColorBrewer")
+```
+```{r}
+head(demoFreq)
 ```
 
 ```{r}
-library(wordcloud)
+df
+```
+
+```{r}
+library(wordcloud2)
 library(RColorBrewer)
 
 set.seed(1234) # for reproducibility 
-wordcloud(words = df$word, freq = df$freq, min.freq = 1,           max.words=300, random.order=FALSE, rot.per=0.35,            colors=brewer.pal(8, "Dark2"))
+wordcloud2(df, size=0.7, shape = 'circle')
 ```
 
 
